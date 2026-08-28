@@ -1,0 +1,21 @@
+# Local credentials, job records, and downloaded media
+.codex/
+.verify-codex/
+.verify-codex-2/
+.verify-codex-3/
+state/
+jobs/
+history/
+codex/
+*.cookie
+encipher.py
+
+# Language and test artifacts
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+node_modules/
+
+# The temporary checkout used to export the pinned upstream source.
+/third_party/TikTokDownloader/

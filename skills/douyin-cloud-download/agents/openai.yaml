@@ -1,0 +1,7 @@
+interface:
+  display_name: "抖音云盘下载"
+  short_description: "下载抖音视频、图集、实况与直播，并归档到夸克网盘或百度网盘"
+  default_prompt: "使用 $douyin-cloud-download 下载我指定的抖音媒体，并按要求保存到夸克网盘、百度网盘或两个网盘。"
+
+policy:
+  allow_implicit_invocation: true
