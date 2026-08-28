@@ -1,72 +1,82 @@
-# Douyin Cloud Download
+# 抖音网盘下载
 
-An installable Codex Skill bundle for downloading authorised Douyin media and archiving it to Quark Drive, Baidu Netdisk, or both.
+[English](README_EN.md)
 
-It contains:
+可安装的 Codex Skill 套件：下载已获授权的抖音媒体，并归档至夸克网盘、百度网盘或两者。
 
-- `skills/douyin-cloud-download`: the pinned DouK-Downloader adapter, job ledger, tests, and cloud-archive instructions.
-- `skills/baidu-drive`: the complete Baidu Netdisk Skill used by the adapter.
-- `vendor/TikTokDownloader`: the DouK-Downloader source pinned to `d3806386b392da7341397e18522acdd5283f2c81`.
-- `scripts/install.ps1`: a clean-machine installer for the two local Skills, the pinned runtime, and the official Quark Drive Skill.
+本仓库包含：
 
-The installer obtains the Quark Drive Skill from its official published installation endpoint instead of committing its opaque runtime or any account data to this repository.
+- `skills/douyin-cloud-download`：固定版本 DouK-Downloader 的适配器、任务清单、测试与网盘归档规则。
+- `skills/baidu-drive`：供适配器调用的完整百度网盘 Skill。
+- `vendor/TikTokDownloader`：固定在 `d3806386b392da7341397e18522acdd5283f2c81` 的 DouK-Downloader 源码。
+- `scripts/install.ps1`：在干净机器上一键安装两个本地 Skill、固定下载运行时，以及夸克网盘官方 Skill。
 
-## Requirements
+安装器会从夸克网盘官方发布端点获取夸克网盘 Skill；不会把其不透明运行时、账号凭据或本机任务记录提交到本仓库。
+
+## 环境要求
 
 - Windows PowerShell 7
-- Git, Python 3.12, `uv`, Node.js 16+, and Git Bash
-- A Codex desktop installation
-- Your own authorised Douyin account/session when the source requires it
-- Your own Quark and/or Baidu Netdisk accounts
+- Git、Python 3.12、`uv`、Node.js 16+ 与 Git Bash
+- Codex 桌面应用
+- 需要访问受限抖音内容时，使用你自己已授权的抖音账号/会话
+- 你自己的夸克网盘和/或百度网盘账号
 
-## Install
+## 安装
 
-Clone this repository, then run:
+克隆本仓库后运行：
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install.ps1
+.\scripts\install.ps1 -Onboard -QuickStart
 ```
 
-The installer never copies cookies, netdisk tokens, past jobs, search history, or downloaded media. It installs the bundled Douyin and Baidu Skills under the active Codex home, installs the pinned DouK runtime from `vendor/`, and retrieves the official Quark Skill into the same Skill directory.
+安装器不会复制 Cookie、网盘令牌、历史任务、搜索记录或下载媒体。它会把本仓库中的抖音与百度网盘 Skill 安装到当前 Codex 主目录，将固定的 DouK 运行时从 `vendor/` 安装到状态目录，并获取官方夸克网盘 Skill。`-Onboard` 会在安装后启动新手配置向导；`-QuickStart` 会减少向导中的重复确认。若想稍后再配置，运行 `.\scripts\onboard.ps1`。
 
-The Baidu CLI deliberately remains an interactive step because it displays its own safety notice. To install it during setup, explicitly run:
+向导会先说明如何从已登录的抖音浏览器请求中复制完整 Cookie，并只在本地 DouK-Downloader 终端中输入；随后按你的选择发起夸克和/或百度网盘的官方授权。它不会读取浏览器 Cookie、显示网盘令牌，或绕过平台的安全提示。
+
+百度 CLI 保持为可见的交互式安装步骤，以便阅读其安全提示。若要在安装时一并安装，显式执行：
 
 ```powershell
-.\scripts\install.ps1 -InstallBaiduCli
+.\scripts\install.ps1 -InstallBaiduCli -Onboard
 ```
 
-Then complete the required interactive sign-ins:
+要一次配置两个网盘，可在安装完成后运行：
 
 ```powershell
-# Configure the Douyin disclaimer and Cookie only in this terminal.
+.\scripts\onboard.ps1 -Drive both -QuickStart
+```
+
+随后完成必要的交互式登录：
+
+```powershell
+# 仅在此终端中配置抖音免责声明与 Cookie。
 uv run --project "$env:USERPROFILE\.codex\state\douyin-cloud-download\upstream\d3806386b392" python "$env:USERPROFILE\.codex\skills\douyin-cloud-download\scripts\douyin_cloud.py" configure
 
-# Baidu Netdisk sign-in (after its CLI is installed).
+# 百度网盘登录（已安装百度 CLI 后）。
 bash "$env:USERPROFILE\.codex\skills\baidu-drive\scripts\login.sh"
 ```
 
-For Quark Drive, ask Codex to perform a Quark action; it will initiate the official interactive login if the account is not authorised.
+夸克网盘请直接让 Codex 执行任意夸克操作；若未授权，它会发起官方交互式登录。
 
-## Usage
+## 使用
 
-Restart Codex after installation. Examples:
+安装完成后重启 Codex。示例：
 
 - `把这个抖音下载到夸克网盘`
 - `批量下载这些抖音到百度和夸克`
 - `下载这个抖音合集到夸克网盘`
 
-Cloud media is always stored under `./抖音下载/[作者]/`. Core media is the default; ask explicitly for music or covers.
+媒体固定保存到 `./抖音下载/[作者]/`。默认保存视频、图集或实况等核心媒体；需要配乐或封面时请明确说明。
 
-Only download material you own or are authorised to save. The bundle does not support paid/private-content bypasses or anti-signature bypass code.
+仅下载你拥有或已获授权保存的内容。本套件不支持付费/私密内容绕过，也不会提供反签名绕过代码。
 
-## Verification
+## 验证
 
 ```powershell
 python -m py_compile .\skills\douyin-cloud-download\scripts\douyin_cloud.py
 python .\skills\douyin-cloud-download\tests\test_douyin_cloud.py
 ```
 
-## Licensing
+## 许可证
 
-DouK-Downloader is included as a verbatim GPL-3.0 upstream snapshot; see [vendor/TikTokDownloader/license](vendor/TikTokDownloader/license). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the remaining component boundaries.
+DouK-Downloader 是其上游 GPL-3.0 源码快照，许可证见 [vendor/TikTokDownloader/license](vendor/TikTokDownloader/license)。其他组件的边界见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)。

@@ -1,7 +1,9 @@
 [CmdletBinding()]
 param(
     [string]$CodexHome,
-    [switch]$InstallBaiduCli
+    [switch]$InstallBaiduCli,
+    [switch]$Onboard,
+    [switch]$QuickStart
 )
 
 Set-StrictMode -Version Latest
@@ -147,4 +149,8 @@ if ($InstallBaiduCli) {
 }
 
 Write-Host "Installed Skills under $skillsRoot"
-Write-Host 'Next: configure Douyin Cookie and sign in to the cloud drives interactively.'
+if ($Onboard) {
+    & (Join-Path $PSScriptRoot 'onboard.ps1') -CodexHome $CodexHome -QuickStart:$QuickStart
+    exit $LASTEXITCODE
+}
+Write-Host 'Next: run .\scripts\onboard.ps1 to configure Douyin Cookie and cloud-drive authorisation interactively.'
