@@ -21,7 +21,7 @@ Turn a natural-language Douyin download request into a local job, then hand its 
 1. Preserve the user's exact message as `session-input` for each cloud-drive skill.
 2. Infer `mode`, URLs, destination, optional artifacts, account tab/date limits, saved-folder selectors, and live quality using [usage.md](references/usage.md).
 3. If `saved-folders` has no explicit name, number, or `all`, ask for the scope before downloading. Ask when authorization or a destructive overwrite choice is genuinely missing.
-4. Run `python scripts/douyin_cloud.py doctor --json`. If setup is incomplete, follow [setup.md](references/setup.md).
+4. Run `python scripts/douyin_cloud.py doctor --json`. If setup is incomplete, follow [setup.md](references/setup.md). For the standalone bundle, offer its interactive `scripts/onboard.ps1` flow; it keeps Cookie entry in the local terminal and delegates cloud authorisation to the official provider flows.
 5. Run the download command with argument arrays, never a shell-built string. Read its JSON result and do not claim success unless `status` is `downloaded` and files are present.
 6. Upload the payload using [cloud-upload.md](references/cloud-upload.md). Each drive has its own `{timestamp}-{random6}` session ID, reused throughout the conversation.
 7. After verifying every drive result, update the job with `mark-upload`. Run `finalize`; it deletes the local staging directory only when all requested destinations succeeded. On any partial failure, retain it and retry only failed destinations.

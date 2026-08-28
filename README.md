@@ -27,15 +27,23 @@
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install.ps1
+.\scripts\install.ps1 -Onboard -QuickStart
 ```
 
-安装器不会复制 Cookie、网盘令牌、历史任务、搜索记录或下载媒体。它会把本仓库中的抖音与百度网盘 Skill 安装到当前 Codex 主目录，将固定的 DouK 运行时从 `vendor/` 安装到状态目录，并获取官方夸克网盘 Skill。
+安装器不会复制 Cookie、网盘令牌、历史任务、搜索记录或下载媒体。它会把本仓库中的抖音与百度网盘 Skill 安装到当前 Codex 主目录，将固定的 DouK 运行时从 `vendor/` 安装到状态目录，并获取官方夸克网盘 Skill。`-Onboard` 会在安装后启动新手配置向导；`-QuickStart` 会减少向导中的重复确认。若想稍后再配置，运行 `.\scripts\onboard.ps1`。
+
+向导会先说明如何从已登录的抖音浏览器请求中复制完整 Cookie，并只在本地 DouK-Downloader 终端中输入；随后按你的选择发起夸克和/或百度网盘的官方授权。它不会读取浏览器 Cookie、显示网盘令牌，或绕过平台的安全提示。
 
 百度 CLI 保持为可见的交互式安装步骤，以便阅读其安全提示。若要在安装时一并安装，显式执行：
 
 ```powershell
-.\scripts\install.ps1 -InstallBaiduCli
+.\scripts\install.ps1 -InstallBaiduCli -Onboard
+```
+
+要一次配置两个网盘，可在安装完成后运行：
+
+```powershell
+.\scripts\onboard.ps1 -Drive both -QuickStart
 ```
 
 随后完成必要的交互式登录：

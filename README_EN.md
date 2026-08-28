@@ -27,15 +27,23 @@ Clone this repository, then run:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
-.\scripts\install.ps1
+.\scripts\install.ps1 -Onboard -QuickStart
 ```
 
-The installer never copies cookies, netdisk tokens, past jobs, search history, or downloaded media. It installs the bundled Douyin and Baidu Skills under the active Codex home, installs the pinned DouK runtime from `vendor/`, and retrieves the official Quark Skill into the same Skill directory.
+The installer never copies cookies, netdisk tokens, past jobs, search history, or downloaded media. It installs the bundled Douyin and Baidu Skills under the active Codex home, installs the pinned DouK runtime from `vendor/`, and retrieves the official Quark Skill into the same Skill directory. `-Onboard` starts the interactive first-use guide and `-QuickStart` removes its repeated confirmations; run `.\scripts\onboard.ps1` later to resume it.
+
+The guide explains how to copy a complete Cookie from a logged-in Douyin browser request and accepts it only in the local DouK-Downloader terminal. It then starts the official Quark and/or Baidu authorisation flows selected by the user. It never reads browser Cookies, displays cloud tokens, or bypasses provider safety prompts.
 
 The Baidu CLI deliberately remains an interactive step because it displays its own safety notice. To install it during setup, explicitly run:
 
 ```powershell
-.\scripts\install.ps1 -InstallBaiduCli
+.\scripts\install.ps1 -InstallBaiduCli -Onboard
+```
+
+To configure both cloud drives in one pass after installation:
+
+```powershell
+.\scripts\onboard.ps1 -Drive both -QuickStart
 ```
 
 Then complete the required interactive sign-ins:
