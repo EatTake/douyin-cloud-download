@@ -9,17 +9,18 @@
 <img alt="GitHub Repo stars" src="https://img.shields.io/github/stars/JoeanAmier/TikTokDownloader?style=flat-square&color=fda7df">
 <img alt="GitHub code size in bytes" src="https://img.shields.io/github/languages/code-size/JoeanAmier/TikTokDownloader?style=flat-square&color=a29bfe">
 <br>
-<img alt="Static Badge" src="https://img.shields.io/badge/Python-3.12-b8e994?style=flat-square&logo=python&labelColor=3dc1d3">
+<img alt="Static Badge" src="https://img.shields.io/badge/Python-≥3.12-b8e994?style=flat-square&logo=python&labelColor=3dc1d3">
 <img alt="GitHub release (with filter)" src="https://img.shields.io/github/v/release/JoeanAmier/TikTokDownloader?style=flat-square&color=48dbfb">
 <img src="https://img.shields.io/badge/Sourcery-enabled-884898?style=flat-square&color=1890ff" alt="">
 <img alt="Static Badge" src="https://img.shields.io/badge/Docker-badc58?style=flat-square&logo=docker">
 <img alt="GitHub all releases" src="https://img.shields.io/github/downloads/JoeanAmier/TikTokDownloader/total?style=flat-square&color=ffdd59">
-</div>
 <br>
-<p>🔥 <b>TikTok Posts/Liked/Mix/Live/Video/Image/Music; DouYin Posts/Liked/Favorites/Collections/Video/Image/LivePhoto/Live/Music/Mix/Comments/Account/Search/Hot Board Data Acquisition Tools:</b> Fully open-source, free data collection and file download tool based on HTTPX module implementation; batch download of DouYin account posts works, liked works, favorites works and collections works; batch download of TikTok account posts works and liked works; download of DouYin linked or TikTok linked works; obtain DouYin live stream push addresses; download DouYin live stream video; obtain TikTok live stream push addresses; download TikTok live stream video; collect DouYin works comments data; batch download of DouYin Mix works; batch download of TikTok Mix works; collect detailed data of DouYin accounts; collect DouYin user/works/live search results; collect DouYin Hot Board data.</p>
+<p>🔥 DouYin / TikTok content download and data collection tool</p>
 <p>⭐ Previous project names: <code>TikTokDownloader</code></p>
+</div>
+<hr>
+<p>⚠️ Some features in the current version are no longer functioning. The project plans to refactor in version <code>6.0</code>, and after the refactoring, some of the broken features will be fixed.</p>
 <p>⚠️ The encryption parameter algorithm for this project has expired and is no longer valid; to ensure legal and regulatory compliance, the parameter algorithm is no longer maintained, and some features may not work properly. If you need to use it, please prepare the encryption parameter generation code yourself. For configuration instructions, please refer to the <a href="https://github.com/JoeanAmier/TikTokDownloader/wiki/Documentation#%E5%8A%A0%E5%AF%86%E5%8F%82%E6%95%B0%E7%94%9F%E6%88%90%E4%BB%A3%E7%A0%81%E9%85%8D%E7%BD%AE">documentation</a>!</p>
-<p>⭐ Due to the author's limited energy, I was unable to update the English document in a timely manner, and the content may have become outdated, partial translation is machine translation, the translation result may be incorrect, Suggest referring to Chinese documentation. If you want to contribute to translation, we warmly welcome you.</p>
 <hr>
 
 # 📝 Project Features
@@ -30,7 +31,6 @@
 <li>✅ Download DouYin video/image</li>
 <li>✅ Download DouYin live photo</li>
 <li>✅ Download the highest quality video file</li>
-<li>✅ Download TikTok video source files</li>
 <li>✅ Download TikTok video/image</li>
 <li>✅ Download of DouYin account posts/liked/favorites works</li>
 <li>✅ Download of TikTok account posts/liked works</li>
@@ -62,7 +62,6 @@
 <li>✅ Collect DouYin search data</li>
 <li>✅ Collect DouYin hot board data</li>
 <li>✅ Record IDs of already downloaded works</li>
-<li>☑️ <del>Scan QR code to log in and obtain Cookies</del></li>
 <li>✅ Obtain Cookies from browsers</li>
 <li>✅ Support Web API calls</li>
 <li>✅ Support multithreaded downloading of works</li>
@@ -106,7 +105,7 @@ generated documentation!**
 ### API call example code
 
 ```python
-from httpx import post
+from curl_cffi.requests import post
 from rich import print
 
 
@@ -132,6 +131,7 @@ demo()
 <p>⭐ This project includes GitHub Actions for automatic building executable files. Users can use GitHub Actions to build the latest source code into executable files at any time!</p>
 <p>⭐ For the automatic building executable files tutorial, please refer to the <code>Build of Executable File Guide</code> section of this document. If you need a more detailed step-by-step tutorial with illustrations, please <a href="https://mp.weixin.qq.com/s/TorfoZKkf4-x8IBNLImNuw">check out this article</a>!</p>
 <p><strong>Note: Due to the macOS platform's executable file <code>main</code> not being code-signed, it will be restricted by system security measures on first run. Please execute the command <code>xattr -cr project_folder_path</code> in the terminal to remove the security flag, after which it can run normally.</strong></p>
+<p><strong><a href="https://nodejs.org/">Node.js</a> (Optional Dependency)</strong>: Some features depend on Node.js to execute JavaScript code and require Node.js version 18 or above. It is recommended that users install Node.js on their own; without it, some features may be affected.</p>
 <hr>
 <ol>
 <li><b>Run the executable file</b> or <b>configure the environment to run</b> (choose one of the two)
@@ -166,11 +166,6 @@ demo()
 </ol>
 <ol><b><del>Read Cookie from Browser (Deprecated)</del></b>
 <li><del>Select the <code>Extracting cookie from browser</code> option, then follow the prompts to input the browser type or its corresponding number</del></li>
-</ol>
-<ol><b><del>Obtain Cookie via QR Code Login</del> (No longer valid)</b>
-<li><del>Select the <code>Scan code to login and get cookies (DouYin)</code> option, the program will display a login QR code image and open it with the default application</del></li>
-<li><del>Use the DouYin app to scan the QR code and log in</del></li>
-<li><del>Follow the prompts, the program will automatically write the Cookie into the configuration file</del></li>
 </ol>
 </li>
 <li>Return to the program interface, sequentially select <code>Terminal Mode</code> -> <code>Batch Download Works from Links</code> -> <code>Manually enter the works links to be collected</code>.</li>
@@ -325,7 +320,7 @@ repository to execute the build process
 
 ## Program Update
 
-<p><strong>Method 1:</strong> Download and extract the files, then copy the old version of the <code>_internal\Volume</code> folder into the new version's <code>_internal</code> folder.</p>
+<p><strong>Method 1:</strong> Download and extract the files, then copy the old version's <code>Volume</code> folder into the new version's program root directory.</p>
 <p><strong>Method 2:</strong> Download and extract the files (do not run the program), then copy all files and directly overwrite the old version.</p>
 
 # 💝 Project Sponsorship
@@ -427,7 +422,8 @@ repository to execute the build process
 * https://github.com/Johnserf-Seed/f2
 * https://github.com/Evil0ctal/Douyin_TikTok_Download_API
 * https://github.com/ihmily/DouyinLiveRecorder
-* https://github.com/encode/httpx/
+* https://github.com/xvhuan/tiktok-web-params
+* https://github.com/lexiforest/curl_cffi/
 * https://github.com/Textualize/rich
 * https://github.com/omnilib/aiosqlite
 * https://github.com/Tinche/aiofiles
@@ -435,5 +431,5 @@ repository to execute the build process
 * https://foss.heptapod.net/openpyxl/openpyxl
 * https://github.com/carpedm20/emoji/
 * https://github.com/lxml/lxml
-* https://github.com/neverl805/never-jscore
+* https://github.com/extremeheat/JSPyBridge
 * https://ffmpeg.org/ffmpeg-all.html

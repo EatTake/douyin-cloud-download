@@ -22,21 +22,42 @@ from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 from urllib.parse import urlparse
 
+SCRIPT_DIR = Path(__file__).resolve().parent
+if str(SCRIPT_DIR) not in sys.path:
+    sys.path.insert(0, str(SCRIPT_DIR))
 
-UPSTREAM_URL = "https://github.com/JoeanAmier/TikTokDownloader.git"
-PINNED_COMMIT = "d3806386b392da7341397e18522acdd5283f2c81"
+from dcd_core.diagnostics import create_diagnostic_bundle, log_event, sanitize_message
+from dcd_core.errors import error_payload, error_spec
+from dcd_core.models import JobManifest
+from dcd_core.state import CURRENT_JOB_SCHEMA, atomic_json as core_atomic_json, load_and_migrate, migrate_all_manifests as core_migrate_all_manifests
+
+
+def _upstream_lock() -> dict[str, Any]:
+    candidates = [
+        Path(__file__).resolve().parents[1] / "UPSTREAMS.lock.json",
+        Path(__file__).resolve().parents[3] / "UPSTREAMS.lock.json",
+    ]
+    for path in candidates:
+        try:
+            data = json.loads(path.read_text(encoding="utf-8-sig"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if isinstance(data, dict) and isinstance(data.get("douk"), dict):
+            return data
+    raise RuntimeError("UPSTREAMS.lock.json is missing or invalid")
+
+
+_LOCK = _upstream_lock()
+UPSTREAM_URL = str(_LOCK["douk"]["repository"])
+PINNED_COMMIT = str(_LOCK["douk"]["commit"])
 RUNTIME_COMMIT_FILE = ".douyin-cloud-download-upstream-commit"
+RUNTIME_MANIFEST_FILE = "runtime-manifest.json"
 JOB_RE = re.compile(r"^[0-9a-f]{12}$")
 MEDIA_SUFFIXES = {
     ".mp4", ".mov", ".mkv", ".webm", ".flv", ".m4v",
     ".jpg", ".jpeg", ".png", ".webp", ".gif", ".heic",
     ".mp3", ".m4a", ".aac", ".wav", ".flac", ".ogg",
 }
-SECRET_RE = re.compile(
-    r"(?i)(cookie|authorization|access[_-]?token|refresh[_-]?token|bduss|stoken)"
-    r"\s*[:=]\s*([^\s,;]+)"
-)
-URL_RE = re.compile(r"https?://[^\s<>\"]+")
 FILENAME_SEPARATOR = "__"
 UNKNOWN_AUTHOR = "未知作者"
 DEFAULT_CLOUD_ROOT = "抖音下载"
@@ -46,7 +67,9 @@ DEFAULT_CLOUD_LAYOUT = f"./{DEFAULT_CLOUD_ROOT}/[作者]"
 class SkillError(RuntimeError):
     def __init__(self, code: str, message: str):
         super().__init__(message)
-        self.code = code
+        self.name = code
+        self.info = error_spec(code)
+        self.code = self.info.code
 
 
 def codex_root() -> Path:
@@ -77,10 +100,20 @@ def emit(data: dict[str, Any]) -> None:
     print(json.dumps(data, ensure_ascii=False, sort_keys=True))
 
 
-def fail(code: str, message: str, *, details: Any = None) -> int:
-    result: dict[str, Any] = {"ok": False, "error": code, "message": message}
+def fail(name: str, message: str, *, details: Any = None) -> int:
+    info = error_payload(name, sanitize_message(message))
+    result: dict[str, Any] = {
+        "ok": False,
+        "error": name,
+        "error_code": info["code"],
+        "message": info["message"],
+        "cause": info["cause"],
+        "retryable": info["retryable"],
+        "recovery": info["recovery"],
+    }
     if details is not None:
         result["details"] = details
+    log_event(state_root(), "command_error", error=info)
     emit(result)
     return 2
 
@@ -124,6 +157,67 @@ def runtime_commit(repo: Path) -> str | None:
     return value or None
 
 
+def _runtime_manifest_files(repo: Path) -> dict[str, str]:
+    excluded_dirs = {".git", ".venv", "Volume", "__pycache__"}
+    excluded_files = {RUNTIME_COMMIT_FILE, RUNTIME_MANIFEST_FILE, "encipher.py"}
+    files: dict[str, str] = {}
+    for path in sorted(repo.rglob("*")):
+        if not path.is_file():
+            continue
+        relative = path.relative_to(repo)
+        if any(part in excluded_dirs for part in relative.parts):
+            continue
+        if relative.as_posix() in excluded_files or path.suffix.lower() in {".pyc", ".pyo"}:
+            continue
+        digest = hashlib.sha256()
+        with path.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        files[relative.as_posix()] = digest.hexdigest()
+    return files
+
+
+def write_runtime_manifest(repo: Path) -> None:
+    data = {
+        "schema_version": 1,
+        "commit": PINNED_COMMIT,
+        "algorithm": "sha256",
+        "files": _runtime_manifest_files(repo),
+    }
+    atomic_json(repo / RUNTIME_MANIFEST_FILE, data)
+
+
+def runtime_integrity(repo: Path) -> tuple[bool, str | None]:
+    path = repo / RUNTIME_MANIFEST_FILE
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return False, "runtime manifest is missing or unreadable"
+    if data.get("commit") != PINNED_COMMIT or data.get("algorithm") != "sha256":
+        return False, "runtime manifest metadata does not match the pinned runtime"
+    expected = data.get("files")
+    if not isinstance(expected, dict) or not expected:
+        return False, "runtime manifest does not contain immutable file hashes"
+    repo_resolved = repo.resolve()
+    for relative, expected_hash in expected.items():
+        if not isinstance(relative, str) or not isinstance(expected_hash, str):
+            return False, "runtime manifest contains an invalid entry"
+        target = (repo / Path(*PurePosixPath(relative).parts)).resolve()
+        try:
+            target.relative_to(repo_resolved)
+        except ValueError:
+            return False, f"runtime manifest contains an unsafe path: {relative}"
+        if not target.is_file():
+            return False, f"runtime immutable file is missing: {relative}"
+        digest = hashlib.sha256()
+        with target.open("rb") as handle:
+            for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                digest.update(chunk)
+        if digest.hexdigest() != expected_hash:
+            return False, f"runtime immutable file hash mismatch: {relative}"
+    return True, None
+
+
 def verify_runtime() -> Path:
     repo = runtime_root()
     if not repo.exists():
@@ -134,6 +228,9 @@ def verify_runtime() -> Path:
             "runtime_commit_mismatch",
             f"Runtime commit is {commit or 'unreadable'}, expected {PINNED_COMMIT}; it will not be overwritten.",
         )
+    integrity_ok, integrity_error = runtime_integrity(repo)
+    if not integrity_ok:
+        raise SkillError("runtime_integrity_failed", integrity_error or "Runtime integrity verification failed.")
     return repo
 
 
@@ -145,7 +242,12 @@ def bootstrap(_: argparse.Namespace) -> int:
     history_root().mkdir(exist_ok=True)
     repo = runtime_root()
     if repo.exists():
-        verify_runtime()
+        commit = runtime_commit(repo)
+        if commit != PINNED_COMMIT:
+            raise SkillError(
+                "runtime_commit_mismatch",
+                f"Runtime commit is {commit or 'unreadable'}, expected {PINNED_COMMIT}; it will not be overwritten.",
+            )
     else:
         temp_parent = Path(tempfile.mkdtemp(prefix="bootstrap-", dir=root))
         candidate = temp_parent / "repo"
@@ -159,6 +261,8 @@ def bootstrap(_: argparse.Namespace) -> int:
             shutil.rmtree(temp_parent, ignore_errors=True)
     run_checked(["uv", "sync", "--locked", "--python", "3.12", "--no-dev"], cwd=repo)
     contract_check(repo)
+    write_runtime_manifest(repo)
+    verify_runtime()
     emit({"ok": True, "status": "ready", "runtime": str(repo), "commit": PINNED_COMMIT})
     return 0
 
@@ -199,28 +303,34 @@ def doctor_data() -> dict[str, Any]:
     repo = runtime_root()
     commit = runtime_commit(repo)
     settings = read_settings(repo) if commit == PINNED_COMMIT else {}
+    integrity_ok, integrity_error = runtime_integrity(repo) if commit == PINNED_COMMIT else (False, None)
     checks = {
         "git": shutil.which("git") is not None,
         "uv": shutil.which("uv") is not None,
         "ffmpeg": shutil.which("ffmpeg") is not None,
         "runtime_present": repo.exists(),
         "runtime_commit": commit == PINNED_COMMIT,
+        "runtime_integrity": integrity_ok,
         "disclaimer_accepted": disclaimer_accepted(repo) if commit == PINNED_COMMIT else False,
         "douyin_cookie": bool(str(settings.get("cookie", "")).strip()),
-        "encipher": (repo / "encipher.py").is_file() if head == PINNED_COMMIT else False,
+        "encipher": (repo / "encipher.py").is_file() if commit == PINNED_COMMIT else False,
     }
-    required = ("git", "uv", "runtime_present", "runtime_commit", "disclaimer_accepted", "douyin_cookie")
+    required = ("git", "uv", "runtime_present", "runtime_commit", "runtime_integrity", "disclaimer_accepted", "douyin_cookie")
     return {
         "ok": all(checks[k] for k in required),
         "ready": all(checks[k] for k in required),
         "commit": PINNED_COMMIT,
         "runtime": str(repo),
         "checks": checks,
+        "runtime_integrity_error": integrity_error,
     }
 
 
 def doctor(args: argparse.Namespace) -> int:
     data = doctor_data()
+    if args.bundle is not None:
+        data["diagnostic_bundle"] = str(create_diagnostic_bundle(state_root(), data, args.bundle or None))
+    log_event(state_root(), "doctor", ready=data["ready"], bundle=bool(args.bundle is not None))
     if args.json:
         emit(data)
     else:
@@ -290,8 +400,16 @@ def install_encipher(args: argparse.Namespace) -> int:
 
 
 class FileLock:
-    def __init__(self, path: Path):
+    def __init__(
+        self,
+        path: Path,
+        *,
+        error_code: str = "download_in_progress",
+        error_message: str = "Another Douyin download job currently holds the runtime lock.",
+    ):
         self.path = path
+        self.error_code = error_code
+        self.error_message = error_message
         self.handle: Any = None
 
     def __enter__(self) -> "FileLock":
@@ -311,7 +429,7 @@ class FileLock:
                 fcntl.flock(self.handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except OSError as exc:
             self.handle.close()
-            raise SkillError("download_in_progress", "Another Douyin download job currently holds the runtime lock.") from exc
+            raise SkillError(self.error_code, self.error_message) from exc
         return self
 
     def __exit__(self, *_: Any) -> None:
@@ -381,20 +499,31 @@ def manifest_path(job_id: str) -> Path:
 
 
 def atomic_json(path: Path, data: dict[str, Any]) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temp = path.with_suffix(path.suffix + ".tmp")
-    temp.write_text(json.dumps(data, indent=2, ensure_ascii=False, sort_keys=True), encoding="utf-8")
-    temp.replace(path)
+    core_atomic_json(path, data)
 
 
-def load_manifest(job_id: str) -> dict[str, Any]:
+def migrate_all_manifests(root: Path | None = None) -> dict[str, Any]:
+    return core_migrate_all_manifests(root or state_root())
+
+
+def job_lock(job_id: str) -> FileLock:
+    return FileLock(
+        state_root() / "locks" / f"{job_id}.lock",
+        error_code="job_busy",
+        error_message=f"Job {job_id} is being updated by another process.",
+    )
+
+
+def load_manifest(job_id: str) -> JobManifest:
     path = manifest_path(job_id)
     if not path.is_file():
         history = history_root() / f"{job_id}.json"
         if history.is_file():
-            return json.loads(history.read_text(encoding="utf-8"))
+            data, _ = load_and_migrate(history)
+            return data
         raise SkillError("job_not_found", f"No job exists with ID {job_id}.")
-    return json.loads(path.read_text(encoding="utf-8"))
+    data, _ = load_and_migrate(path)
+    return data
 
 
 def media_kind(path: Path) -> str:
@@ -478,12 +607,6 @@ def author_folders(files: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [grouped[name] for name in sorted(grouped)]
 
 
-def sanitize_message(value: str) -> str:
-    value = URL_RE.sub("[REDACTED_URL]", value)
-    value = SECRET_RE.sub(lambda m: f"{m.group(1)}=[REDACTED]", value)
-    return value[:1000]
-
-
 def validate_download_args(args: argparse.Namespace) -> None:
     needs_urls = {"auto", "works", "account", "mix", "saved-works", "live"}
     if args.mode in needs_urls and not args.url:
@@ -496,14 +619,16 @@ def validate_download_args(args: argparse.Namespace) -> None:
         raise SkillError("account_options_invalid", "Account tab/date/page options are valid only for account or auto mode.")
 
 
-def new_manifest(args: argparse.Namespace, job_id: str, payload: Path) -> dict[str, Any]:
+def new_manifest(args: argparse.Namespace, job_id: str, payload: Path) -> JobManifest:
     requested = destinations(args.destination)
     return {
-        "schema_version": 1,
+        "schema_version": CURRENT_JOB_SCHEMA,
         "job_id": job_id,
         "created_at": utc_now(),
         "updated_at": utc_now(),
-        "status": "downloading",
+        "state": "created",
+        "status": "created",
+        "download_attempts": 0,
         "mode": args.mode,
         "source_urls": list(dict.fromkeys(args.url or [])),
         "options": {
@@ -529,8 +654,7 @@ def new_manifest(args: argparse.Namespace, job_id: str, payload: Path) -> dict[s
     }
 
 
-def download(args: argparse.Namespace) -> int:
-    validate_download_args(args)
+def ensure_download_ready(manifest: dict[str, Any]) -> Path:
     repo = verify_runtime()
     contract_check(repo)
     status = doctor_data()
@@ -538,18 +662,30 @@ def download(args: argparse.Namespace) -> int:
         raise SkillError("disclaimer_not_accepted", "Run configure and accept the upstream disclaimer after reading it.")
     if not status["checks"]["douyin_cookie"]:
         raise SkillError("douyin_cookie_missing", "Run configure and enter a valid Douyin Cookie in the terminal.")
-    contains_live = args.mode == "live" or (args.mode == "auto" and any(classify_url(url) == "live" for url in args.url))
+    urls = list(manifest.get("source_urls", []))
+    mode = str(manifest.get("mode", "auto"))
+    contains_live = mode == "live" or (mode == "auto" and any(classify_url(url) == "live" for url in urls))
     if contains_live and not status["checks"]["ffmpeg"]:
         raise SkillError("ffmpeg_missing", "ffmpeg is required for live recording.")
+    return repo
+
+
+def run_download_job(job_id: str) -> int:
+    manifest = load_manifest(job_id)
+    repo = ensure_download_ready(manifest)
+    payload = Path(manifest["payload_path"]).resolve()
+    payload.mkdir(parents=True, exist_ok=True)
 
     state_root().mkdir(parents=True, exist_ok=True)
     with FileLock(state_root() / "download.lock"):
-        job_id = uuid.uuid4().hex[:12]
-        job = job_path(job_id)
-        payload = job / "payload"
-        payload.mkdir(parents=True)
-        manifest = new_manifest(args, job_id, payload)
-        atomic_json(manifest_path(job_id), manifest)
+        with job_lock(job_id):
+            manifest = load_manifest(job_id)
+            manifest["state"] = "downloading"
+            manifest["status"] = "downloading"
+            manifest["download_attempts"] = int(manifest.get("download_attempts", 0)) + 1
+            manifest["error"] = None
+            manifest["updated_at"] = utc_now()
+            atomic_json(manifest_path(job_id), manifest)
         worker_args = [
             "uv", "run", "--project", str(repo), "python", str(Path(__file__).resolve()),
             "_worker", "--job", job_id,
@@ -562,29 +698,87 @@ def download(args: argparse.Namespace) -> int:
             interrupted = True
             return_code = 130
 
-        manifest = load_manifest(job_id)
-        organize_by_author(payload)
-        files = inventory(payload)
-        manifest["files"] = files
-        manifest["author_folders"] = author_folders(files)
-        manifest["file_count"] = len(files)
-        manifest["total_size"] = sum(item["size"] for item in files)
-        manifest["updated_at"] = utc_now()
-        if interrupted or return_code == 130:
-            manifest["status"] = "interrupted"
-            manifest["error"] = {"code": "interrupted", "message": "Download interrupted; partial files retained and must not be auto-uploaded."}
-        elif return_code != 0:
-            manifest["status"] = "failed"
-            manifest["error"] = manifest.get("error") or {"code": "upstream_failed", "message": f"Pinned downloader exited with code {return_code}."}
-        elif not files:
-            manifest["status"] = "failed"
-            manifest["error"] = {"code": "no_media_downloaded", "message": "No media was created; check Cookie, access, and upstream encryption compatibility."}
-        else:
-            manifest["status"] = "downloaded"
-            manifest["error"] = None
-        atomic_json(manifest_path(job_id), manifest)
+        with job_lock(job_id):
+            manifest = load_manifest(job_id)
+            organize_by_author(payload)
+            files = inventory(payload)
+            manifest["files"] = files
+            manifest["author_folders"] = author_folders(files)
+            manifest["file_count"] = len(files)
+            manifest["total_size"] = sum(item["size"] for item in files)
+            manifest["updated_at"] = utc_now()
+            if interrupted or return_code == 130:
+                manifest["status"] = "interrupted"
+                manifest["error"] = error_payload("interrupted", "Download interrupted; partial files retained and must not be auto-uploaded.")
+            elif return_code != 0:
+                manifest["status"] = "failed"
+                manifest["error"] = manifest.get("error") or error_payload("upstream_failed", f"Pinned downloader exited with code {return_code}.")
+            elif not files:
+                manifest["status"] = "failed"
+                manifest["error"] = error_payload("no_media_downloaded", "No media was created; check Cookie, access, and upstream encryption compatibility.")
+            else:
+                manifest["state"] = "downloaded"
+                manifest["status"] = "downloaded"
+                manifest["error"] = None
+            atomic_json(manifest_path(job_id), manifest)
+        log_event(state_root(), "download_finished", job_id=job_id, status=manifest["status"], file_count=manifest["file_count"], total_size=manifest["total_size"])
         emit(manifest)
         return 0 if manifest["status"] == "downloaded" else (130 if manifest["status"] == "interrupted" else 2)
+
+
+def download(args: argparse.Namespace) -> int:
+    validate_download_args(args)
+    state_root().mkdir(parents=True, exist_ok=True)
+    job_id = uuid.uuid4().hex[:12]
+    job = job_path(job_id)
+    payload = job / "payload"
+    payload.mkdir(parents=True)
+    atomic_json(manifest_path(job_id), new_manifest(args, job_id, payload))
+    log_event(state_root(), "job_created", job_id=job_id, mode=args.mode, destinations=destinations(args.destination))
+    return run_download_job(job_id)
+
+
+def resume_download(args: argparse.Namespace) -> int:
+    manifest = load_manifest(args.job)
+    if manifest.get("status") not in {"interrupted", "failed"}:
+        raise SkillError("job_not_resumable", f"Job status {manifest.get('status')} does not require download recovery.")
+    payload = Path(str(manifest.get("payload_path", ""))).resolve()
+    if not payload.exists():
+        raise SkillError("payload_missing", "The retained job payload is missing; the job cannot be resumed in place.")
+    return run_download_job(args.job)
+
+
+def recover(args: argparse.Namespace) -> int:
+    manifest = load_manifest(args.job)
+    if manifest.get("status") in {"interrupted", "failed"}:
+        return resume_download(args)
+    if manifest.get("status") in {"downloaded", "uploading", "upload_failed", "uploaded", "complete"}:
+        emit(manifest)
+        return 0
+    raise SkillError("job_not_recoverable", f"Job status {manifest.get('status')} is not recoverable.")
+
+
+@contextlib.contextmanager
+def temporary_database(repo: Path):
+    volume = repo / "Volume"
+    names = ("DouK-Downloader.db", "DouK-Downloader.db-wal", "DouK-Downloader.db-shm")
+    backup_root = Path(tempfile.mkdtemp(prefix="douyin-db-backup-", dir=state_root()))
+    present: set[str] = set()
+    try:
+        for name in names:
+            source = volume / name
+            if source.is_file():
+                shutil.copy2(source, backup_root / name)
+                present.add(name)
+        yield
+    finally:
+        for name in names:
+            target = volume / name
+            with contextlib.suppress(OSError):
+                target.unlink()
+            if name in present:
+                shutil.copy2(backup_root / name, target)
+        shutil.rmtree(backup_root, ignore_errors=True)
 
 
 @contextlib.contextmanager
@@ -616,55 +810,115 @@ def temporary_settings(repo: Path, payload: Path, options: dict[str, Any]):
         settings_path.write_bytes(original)
 
 
-async def run_worker_mode(tik: Any, mode: str, urls: list[str], options: dict[str, Any], payload: Path) -> None:
+class UpstreamFacade:
+    """Stable boundary around DouK APIs used by this adapter."""
+
+    def __init__(self, tik: Any):
+        self._tik = tik
+
+    @property
+    def extractor(self) -> Any:
+        return self._tik.extractor
+
+    @property
+    def downloader(self) -> Any:
+        return self._tik.downloader
+
+    @property
+    def parameter(self) -> Any:
+        return self._tik.parameter
+
+    async def resolve_links(self, url: str, *, type_: str | None = None) -> list[Any]:
+        if type_ is None:
+            return await self._tik.links.run(url)
+        return await self._tik.links.run(url, type_=type_)
+
+    async def download_works(self, ids: list[str]) -> None:
+        root, params, logger = self._tik.record.run(self._tik.parameter)
+        async with logger(root, console=self._tik.console, **params) as record:
+            await self._tik._handle_detail(ids, False, record)
+
+    async def resolve_account(self, url: str) -> Any:
+        return await self._tik.check_sec_user_id(url)
+
+    async def download_account(self, index: int, sec_uid: Any, options: dict[str, Any]) -> Any:
+        return await self._tik.deal_account_detail(
+            index,
+            sec_uid,
+            tab=options["account_tab"],
+            earliest=options["earliest"],
+            latest=options["latest"],
+            pages=options["pages"],
+        )
+
+    async def resolve_mix(self, url: str) -> tuple[Any, Any, Any]:
+        return await self._tik._check_mix_id(url, False)
+
+    async def download_mix(self, mix_id: Any, item_id: Any, index: int, title: Any) -> Any:
+        return await self._tik.deal_mix_detail(mix_id, item_id, index=index, mix_title=title)
+
+    async def download_saved_works(self, sec_uid: Any) -> Any:
+        return await self._tik._deal_collection_data(sec_uid)
+
+    async def list_saved_folders(self) -> Any:
+        return await self._tik._TikTok__get_collects_list(source=True)
+
+    async def download_saved_folder(self, name: str, folder_id: str) -> Any:
+        return await self._tik._deal_collects_data(name, folder_id)
+
+    async def saved_music(self) -> Any:
+        return await self._tik._TikTok__handle_collection_music()
+
+    async def live_data(self, item: Any) -> Any:
+        return await self._tik.get_live_data(item)
+
+
+async def run_worker_mode(tik: UpstreamFacade, mode: str, urls: list[str], options: dict[str, Any], payload: Path) -> None:
+    if not isinstance(tik, UpstreamFacade):
+        tik = UpstreamFacade(tik)
     if mode == "works":
         ids: list[str] = []
         for url in urls:
-            ids.extend(await tik.links.run(url))
+            ids.extend(await tik.resolve_links(url))
         ids = list(dict.fromkeys(str(item) for item in ids if item))
         if not ids:
             raise SkillError("invalid_works_urls", "No Douyin work IDs could be extracted.")
-        root, params, logger = tik.record.run(tik.parameter)
-        async with logger(root, console=tik.console, **params) as record:
-            await tik._handle_detail(ids, False, record)
+        await tik.download_works(ids)
         return
 
     if mode == "account":
         for index, url in enumerate(urls, start=1):
-            sec_uid = await tik.check_sec_user_id(url)
+            sec_uid = await tik.resolve_account(url)
             if not sec_uid:
                 raise SkillError("invalid_account_url", f"Could not resolve account URL #{index}.")
-            result = await tik.deal_account_detail(
-                index, sec_uid, tab=options["account_tab"], earliest=options["earliest"],
-                latest=options["latest"], pages=options["pages"],
-            )
+            result = await tik.download_account(index, sec_uid, options)
             if result is None and options["account_tab"] in {"favorite", "collection"}:
                 raise SkillError("account_access_failed", f"Account tab access failed for URL #{index}; verify login and permissions.")
         return
 
     if mode == "mix":
         for index, url in enumerate(urls, start=1):
-            mix_id, item_id, title = await tik._check_mix_id(url, False)
+            mix_id, item_id, title = await tik.resolve_mix(url)
             if not item_id:
                 raise SkillError("invalid_mix_url", f"Could not resolve collection URL #{index}.")
-            result = await tik.deal_mix_detail(mix_id, item_id, index=index, mix_title=title)
+            result = await tik.download_mix(mix_id, item_id, index, title)
             if not result:
                 raise SkillError("mix_download_failed", f"Collection download failed for URL #{index}.")
         return
 
     if mode == "saved-works":
         for index, url in enumerate(urls, start=1):
-            sec_uid = await tik.check_sec_user_id(url)
+            sec_uid = await tik.resolve_account(url)
             if not sec_uid:
                 raise SkillError("invalid_owner_url", f"Could not resolve owner account URL #{index}.")
-            result = await tik._deal_collection_data(sec_uid)
+            result = await tik.download_saved_works(sec_uid)
             if result is None:
                 # The upstream returns None after successful downloads too; final inventory is authoritative.
                 continue
         return
 
     if mode == "saved-folders":
-        raw = await tik._TikTok__get_collects_list(source=True)
+        raw = await tik.list_saved_folders()
         if not raw:
             raise SkillError("saved_folders_unavailable", "Could not list saved folders; verify Cookie and account access.")
         items = tik.extractor.extract_collects_info(raw)
@@ -685,11 +939,11 @@ async def run_worker_mode(tik: Any, mode: str, urls: list[str], options: dict[st
                 if item not in selected:
                     selected.append(item)
         for item in selected:
-            await tik._deal_collects_data(str(item["name"]), str(item["id"]))
+            await tik.download_saved_folder(str(item["name"]), str(item["id"]))
         return
 
     if mode == "saved-music":
-        data = await tik._TikTok__handle_collection_music()
+        data = await tik.saved_music()
         if not data:
             raise SkillError("saved_music_unavailable", "Could not read saved music; verify Cookie and account access.")
         extracted = await tik.extractor.run(data, None, "music")
@@ -724,17 +978,19 @@ def choose_quality(flv: dict[str, str], hls: dict[str, str], quality: str) -> st
     return flv_values[index] if 0 <= index < len(flv_values) else None
 
 
-async def record_live(tik: Any, urls: list[str], quality: str, payload: Path) -> None:
+async def record_live(tik: UpstreamFacade, urls: list[str], quality: str, payload: Path) -> None:
+    if not isinstance(tik, UpstreamFacade):
+        tik = UpstreamFacade(tik)
     ffmpeg = shutil.which("ffmpeg")
     if not ffmpeg:
         raise SkillError("ffmpeg_missing", "ffmpeg is required for live recording.")
     target_root = payload / "Live"
     target_root.mkdir(exist_ok=True)
     for index, url in enumerate(urls, start=1):
-        ids = await tik.links.run(url, type_="live")
+        ids = await tik.resolve_links(url, type_="live")
         if not ids:
             raise SkillError("invalid_live_url", f"Could not resolve live URL #{index}.")
-        raw = [await tik.get_live_data(item) for item in ids]
+        raw = [await tik.live_data(item) for item in ids]
         extracted = await tik.extractor.run(raw, None, "live")
         active = [item for item in extracted if item and item.get("status") != 4]
         if not active:
@@ -781,13 +1037,13 @@ async def worker_async(manifest: dict[str, Any]) -> None:
     from src.application.TikTokDownloader import TikTokDownloader  # type: ignore
     from src.application.main_terminal import TikTok  # type: ignore
 
-    with temporary_settings(repo, payload, manifest["options"]):
+    with temporary_settings(repo, payload, manifest["options"]), temporary_database(repo):
         async with TikTokDownloader() as app:
             app.config["Record"] = 1
             app.config["Logger"] = 0
             app.check_config()
             await app.check_settings(False)
-            tik = TikTok(app.parameter, app.database)
+            tik = UpstreamFacade(TikTok(app.parameter, app.database))
             # Use the upstream recorder only as an intra-job ID set. Clear it on both
             # sides so prior jobs never suppress a requested download.
             await app.database.delete_all_download_data()
@@ -807,14 +1063,16 @@ def worker(args: argparse.Namespace) -> int:
         return 130
     except Exception as exc:
         if isinstance(exc, SkillError):
-            code, message = exc.code, str(exc)
+            name, message = exc.name, str(exc)
         else:
-            code, message = "upstream_exception", f"{type(exc).__name__}: {exc}"
-        manifest = load_manifest(args.job)
-        manifest["error"] = {"code": code, "message": sanitize_message(message)}
-        manifest["updated_at"] = utc_now()
-        atomic_json(manifest_path(args.job), manifest)
-        print(f"douyin-cloud-download: {code}: {sanitize_message(message)}", file=sys.stderr)
+            name, message = "upstream_exception", f"{type(exc).__name__}: {exc}"
+        with job_lock(args.job):
+            manifest = load_manifest(args.job)
+            manifest["error"] = error_payload(name, sanitize_message(message))
+            manifest["updated_at"] = utc_now()
+            atomic_json(manifest_path(args.job), manifest)
+        log_event(state_root(), "worker_error", job_id=args.job, error=manifest["error"])
+        print(f"douyin-cloud-download: {manifest['error']['code']}: {sanitize_message(message)}", file=sys.stderr)
         return 2
 
 
@@ -824,52 +1082,60 @@ def show_job(args: argparse.Namespace) -> int:
 
 
 def mark_upload(args: argparse.Namespace) -> int:
-    manifest = load_manifest(args.job)
-    if args.drive not in manifest.get("requested_destinations", []):
-        raise SkillError("drive_not_requested", f"{args.drive} was not requested for this job.")
-    if manifest.get("status") not in {"downloaded", "uploading", "upload_failed"}:
-        raise SkillError("job_not_uploadable", f"Job status {manifest.get('status')} is not uploadable.")
-    entry: dict[str, Any] = {"status": args.status, "updated_at": utc_now()}
-    if args.remote_path:
-        if urlparse(args.remote_path).scheme:
-            raise SkillError("invalid_remote_path", "Upload receipt remote path cannot be a URL.")
-        entry["remote_path"] = sanitize_message(args.remote_path)
-    if args.message:
-        entry["message"] = sanitize_message(args.message)
-    manifest["uploads"][args.drive] = entry
-    statuses = [item["status"] for item in manifest["uploads"].values()]
-    manifest["status"] = "uploaded" if all(value == "success" for value in statuses) else (
-        "upload_failed" if "failed" in statuses else "uploading"
-    )
-    manifest["updated_at"] = utc_now()
-    atomic_json(manifest_path(args.job), manifest)
+    with job_lock(args.job):
+        manifest = load_manifest(args.job)
+        if args.drive not in manifest.get("requested_destinations", []):
+            raise SkillError("drive_not_requested", f"{args.drive} was not requested for this job.")
+        if manifest.get("status") not in {"downloaded", "uploading", "upload_failed"}:
+            raise SkillError("job_not_uploadable", f"Job status {manifest.get('status')} is not uploadable.")
+        entry: dict[str, Any] = {"status": args.status, "updated_at": utc_now()}
+        if args.remote_path:
+            if urlparse(args.remote_path).scheme:
+                raise SkillError("invalid_remote_path", "Upload receipt remote path cannot be a URL.")
+            entry["remote_path"] = sanitize_message(args.remote_path)
+        if args.message:
+            entry["message"] = sanitize_message(args.message)
+        manifest["uploads"][args.drive] = entry
+        statuses = [item["status"] for item in manifest["uploads"].values()]
+        if all(value == "success" for value in statuses):
+            manifest["state"] = "uploaded"
+            manifest["status"] = "uploaded"
+        else:
+            manifest["state"] = "uploading"
+            manifest["status"] = "upload_failed" if "failed" in statuses else "uploading"
+        manifest["updated_at"] = utc_now()
+        atomic_json(manifest_path(args.job), manifest)
+    log_event(state_root(), "upload_marked", job_id=args.job, drive=args.drive, status=args.status)
     emit(manifest)
     return 0
 
 
 def finalize(args: argparse.Namespace) -> int:
-    manifest = load_manifest(args.job)
-    if not manifest.get("uploads") or not all(
-        item.get("status") == "success" for item in manifest["uploads"].values()
-    ):
-        raise SkillError("uploads_incomplete", "All requested cloud uploads must be verified successful before finalization.")
-    manifest["status"] = "complete"
-    manifest["completed_at"] = utc_now()
-    manifest["updated_at"] = utc_now()
-    if manifest.get("keep_local"):
-        atomic_json(manifest_path(args.job), manifest)
-        emit(manifest)
-        return 0
-    job = job_path(args.job).resolve()
-    root = jobs_root().resolve()
-    if job.parent != root or not job.is_dir():
-        raise SkillError("unsafe_cleanup_target", "Refusing to remove an unverified job directory.")
-    receipt = dict(manifest)
-    receipt["payload_path"] = None
-    receipt["local_files_removed"] = True
-    history_root().mkdir(parents=True, exist_ok=True)
-    atomic_json(history_root() / f"{args.job}.json", receipt)
-    shutil.rmtree(job)
+    with job_lock(args.job):
+        manifest = load_manifest(args.job)
+        if not manifest.get("uploads") or not all(
+            item.get("status") == "success" for item in manifest["uploads"].values()
+        ):
+            raise SkillError("uploads_incomplete", "All requested cloud uploads must be verified successful before finalization.")
+        manifest["state"] = "complete"
+        manifest["status"] = "complete"
+        manifest["completed_at"] = utc_now()
+        manifest["updated_at"] = utc_now()
+        if manifest.get("keep_local"):
+            atomic_json(manifest_path(args.job), manifest)
+            emit(manifest)
+            return 0
+        job = job_path(args.job).resolve()
+        root = jobs_root().resolve()
+        if job.parent != root or not job.is_dir():
+            raise SkillError("unsafe_cleanup_target", "Refusing to remove an unverified job directory.")
+        receipt = dict(manifest)
+        receipt["payload_path"] = None
+        receipt["local_files_removed"] = True
+        history_root().mkdir(parents=True, exist_ok=True)
+        atomic_json(history_root() / f"{args.job}.json", receipt)
+        shutil.rmtree(job)
+    log_event(state_root(), "job_finalized", job_id=args.job, keep_local=bool(manifest.get("keep_local")))
     emit(receipt)
     return 0
 
@@ -881,6 +1147,7 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("configure", help="Open the upstream disclaimer and Cookie setup flow.").set_defaults(func=configure)
     doctor_parser = sub.add_parser("doctor", help="Check runtime and one-time setup status.")
     doctor_parser.add_argument("--json", action="store_true")
+    doctor_parser.add_argument("--bundle", nargs="?", const="", help="Create a sanitized diagnostic ZIP; optionally provide an output path.")
     doctor_parser.set_defaults(func=doctor)
 
     encipher = sub.add_parser("install-encipher", help="Install an explicitly supplied external encipher.py.")
@@ -905,6 +1172,14 @@ def build_parser() -> argparse.ArgumentParser:
     show = sub.add_parser("show-job", help="Show a job or finalized receipt.")
     show.add_argument("--job", required=True)
     show.set_defaults(func=show_job)
+
+    resume = sub.add_parser("resume-download", help="Resume an interrupted or failed download using the retained job payload.")
+    resume.add_argument("--job", required=True)
+    resume.set_defaults(func=resume_download)
+
+    recover_parser = sub.add_parser("recover", help="Recover a retained job or report the next retryable stage.")
+    recover_parser.add_argument("--job", required=True)
+    recover_parser.set_defaults(func=recover)
 
     mark = sub.add_parser("mark-upload", help="Record a verified cloud upload result.")
     mark.add_argument("--job", required=True)
@@ -932,7 +1207,7 @@ def main(argv: list[str] | None = None) -> int:
             raise SkillError("invalid_pages", "--pages must be a positive integer.")
         return int(args.func(args))
     except SkillError as exc:
-        return fail(exc.code, str(exc))
+        return fail(exc.name, str(exc))
 
 
 if __name__ == "__main__":
