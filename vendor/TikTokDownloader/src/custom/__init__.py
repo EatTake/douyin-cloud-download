@@ -7,6 +7,7 @@ from .function import (
 )
 from .internal import (
     DISCLAIMER_TEXT,
+    ROOT,
     VOLUME,
     VERSION_MAJOR,
     VERSION_MINOR,
@@ -51,7 +52,7 @@ from .internal import (
     MUSIC_COLLECTION_COVER_INDEX,
     MUSIC_COLLECTION_DOWNLOAD_INDEX,
     __VERSION__,
-    BLANK_HEADERS,
+    IMPERSONATE,
 )
 from .static import (
     MAX_WORKERS,

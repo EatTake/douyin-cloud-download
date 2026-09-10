@@ -21,7 +21,7 @@ Turn a natural-language Douyin download request into a local job, then hand its 
 1. Preserve the user's exact message as `session-input` for each cloud-drive skill.
 2. Infer `mode`, URLs, destination, optional artifacts, account tab/date limits, saved-folder selectors, and live quality using [usage.md](references/usage.md).
 3. If `saved-folders` has no explicit name, number, or `all`, ask for the scope before downloading. Ask when authorization or a destructive overwrite choice is genuinely missing.
-4. Run `python scripts/douyin_cloud.py doctor --json`. If setup is incomplete, follow [setup.md](references/setup.md). For the standalone bundle, offer its interactive `scripts/onboard.ps1` flow; it keeps Cookie entry in the local terminal and delegates cloud authorisation to the official provider flows.
+4. Run `python scripts/douyin_cloud.py doctor --json`. If setup is incomplete, follow [setup.md](references/setup.md). For the standalone bundle, use `scripts/onboard.ps1` on Windows or `scripts/onboard.sh` on Linux; both keep Cookie entry in the local terminal and delegate cloud authorisation to the official provider flows.
 5. Run the download command with argument arrays, never a shell-built string. Read its JSON result and do not claim success unless `status` is `downloaded` and files are present.
 6. Upload the payload using [cloud-upload.md](references/cloud-upload.md). Each drive has its own `{timestamp}-{random6}` session ID, reused throughout the conversation.
 7. After verifying every drive result, update the job with `mark-upload`. Run `finalize`; it deletes the local staging directory only when all requested destinations succeeded. On any partial failure, retain it and retry only failed destinations.
@@ -32,8 +32,11 @@ Turn a natural-language Douyin download request into a local job, then hand its 
 python scripts/douyin_cloud.py bootstrap
 python scripts/douyin_cloud.py configure
 python scripts/douyin_cloud.py doctor --json
+python scripts/douyin_cloud.py doctor --json --bundle
 python scripts/douyin_cloud.py download --mode MODE --url URL ... [options]
 python scripts/douyin_cloud.py show-job --job JOB_ID
+python scripts/douyin_cloud.py recover --job JOB_ID
+python scripts/douyin_cloud.py resume-download --job JOB_ID
 python scripts/douyin_cloud.py mark-upload --job JOB_ID --drive quark|baidu --status success|failed [--remote-path PATH] [--message TEXT]
 python scripts/douyin_cloud.py finalize --job JOB_ID
 python scripts/douyin_cloud.py install-encipher --file PATH --i-understand-this-executes-code
@@ -41,12 +44,16 @@ python scripts/douyin_cloud.py install-encipher --file PATH --i-understand-this-
 
 Do not pass secrets on the command line. `configure` opens the pinned upstream's interactive Cookie/disclaimer flow in the terminal.
 
+The standalone product controller owns product versioning and maintenance: `scripts/setup.py versions`, `rollback [SNAPSHOT_ID]`, `cleanup-old-versions --keep 2`, `upgrade`, and `check-upstreams`. Upgrade creates a metadata backup, migrates retained job manifests to the current schema, snapshots the installed Skills/runtime, and restores the snapshot on installation failure. Rollback preserves mutable DouK and provider auth state.
+
 ## Result handling
 
 - The automatic cloud path is always `./抖音下载/<作者>/`. The `./` denotes the cloud-drive relative root; drive commands use `抖音下载/<作者>/` and must never create a literal dot folder. No task-number or upstream `Download` folder is uploaded.
 - The manifest is outside the upload payload. It contains job ID, source requests, relative files, sizes, media categories, and per-drive status only.
-- An interrupted live job is marked `interrupted`; preserve its partial file and do not upload it automatically.
+- An interrupted job is recoverable. Use `recover --job JOB_ID` to normalize state, then `resume-download --job JOB_ID` when the source mode supports resuming. Preserve partial payloads until the resumed download succeeds.
 - If upstream returns no media, report the explicit failure and recovery hint. Never reinterpret it as success.
 - To resume after an upload failure, use `show-job`, upload the existing `payload_path`, mark only the retried destination, then finalize.
+- Core failures preserve the legacy top-level `error` name and also expose stable `DCD-*` error metadata: `error_code`, `cause`, `retryable`, and `recovery`.
+- `doctor --bundle` creates a sanitized diagnostic ZIP with recent rotating logs, manifests, and release metadata. Do not bypass its redaction layer when sharing diagnostics.
 
 See [usage.md](references/usage.md) for intent mapping, [cloud-upload.md](references/cloud-upload.md) for exact handoff rules, and [licensing.md](references/licensing.md) for the upstream pin and attribution.

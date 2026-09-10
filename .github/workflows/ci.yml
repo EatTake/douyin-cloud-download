@@ -1,0 +1,33 @@
+name: cross-platform-checks
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  unit:
+    strategy:
+      matrix:
+        os: [windows-2022, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Compile Python entry points
+        run: python -m py_compile scripts/setup.py skills/douyin-cloud-download/scripts/douyin_cloud.py
+      - name: Run focused unit tests
+        run: python -m unittest discover -s skills/douyin-cloud-download/tests -p "test_*.py"
+      - name: Validate Linux wrappers
+        if: runner.os == 'Linux'
+        run: bash -n scripts/install.sh scripts/onboard.sh
+      - name: Validate controller doctor output shape
+        shell: python
+        run: |
+          import json
+          import subprocess
+          import sys
+          p = subprocess.run([sys.executable, "scripts/setup.py", "doctor"], text=True, capture_output=True)
+          data = json.loads(p.stdout)
+          assert "preflight" in data and "douyin" in data and "quark" in data and "baidu" in data

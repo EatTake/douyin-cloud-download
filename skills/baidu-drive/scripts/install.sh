@@ -38,6 +38,15 @@ log_error() {
     echo -e "${RED}[ERROR]${NC} $1"
 }
 
+print_install_welcome() {
+    echo ""
+    echo "百度网盘 Skill 已安装完成。"
+    echo "下一步请完成百度网盘登录："
+    echo "  bash \"${CLAUDE_SKILL_DIR:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)}/scripts/login.sh\""
+    echo "登录成功后，即可直接用自然语言管理网盘文件。"
+    echo ""
+}
+
 # 检测操作系统
 detect_os() {
     case "$(uname -s)" in
@@ -139,9 +148,7 @@ main() {
         log_info "bdpan CLI 版本: ${current_version}"
         log_info "✓ 配置完成！"
         echo ""
-        echo "使用方式:"
-        echo "  export BDPAN_BIN=\"$BDPAN_BIN\""
-        echo "  bash scripts/login.sh"
+        print_install_welcome
         echo ""
         exit 0
     fi
@@ -209,7 +216,9 @@ main() {
         elif command -v shasum &> /dev/null; then
             actual_checksum=$(shasum -a 256 "${installer_name}" | awk '{print $1}')
         else
-            log_warn "未找到 sha256sum/shasum 工具，跳过完整性校验"
+            log_error "未找到 sha256sum/shasum，无法验证安装器完整性"
+            rm -f "${installer_name}"
+            exit 1
         fi
 
         if [ -n "$actual_checksum" ]; then
@@ -223,7 +232,9 @@ main() {
             log_info "SHA256 校验通过"
         fi
     else
-        log_warn "当前平台 ${platform_key} 无预置校验值，跳过完整性校验"
+        log_error "当前平台 ${platform_key} 无可信 SHA256 校验值，拒绝执行安装器"
+        rm -f "${installer_name}"
+        exit 1
     fi
 
     # 执行安装器（非交互模式）
@@ -263,10 +274,7 @@ main() {
         echo -e "${RED}└──────────────────────────────────────────────────────────────┘${NC}"
         echo ""
 
-        echo "快速开始:"
-        echo "  1. 执行登录: bash scripts/login.sh"
-        echo "  2. 查看帮助: bdpan --help"
-        echo ""
+        print_install_welcome
     else
         log_error "安装失败，请检查 PATH 是否包含 ~/.local/bin"
         echo "可以手动添加: export PATH=\"\$HOME/.local/bin:\$PATH\""

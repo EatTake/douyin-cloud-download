@@ -1,0 +1,26 @@
+{
+  "schema_version": 1,
+  "reviewed_at": "2026-09-10",
+  "douk": {
+    "repository": "https://github.com/JoeanAmier/TikTokDownloader.git",
+    "commit": "df8aced70e476ae3330fa913186f3207b4843201"
+  },
+  "quark": {
+    "version": "1.0.19",
+    "config_url": "https://open-api-drive.quark.cn/agent/v1/skill_config",
+    "allowed_hosts": [
+      "open-api-drive.quark.cn",
+      "pdds.quark.cn"
+    ],
+    "sha256": "9c33679724545c6387586f555458e2618d9153f7b4fc25e751f374b8f31c3468"
+  },
+  "baidu": {
+    "skill_version": "v1.7.5",
+    "repository": "https://github.com/baidu-netdisk/bdpan-storage.git",
+    "version_url": "https://raw.githubusercontent.com/baidu-netdisk/bdpan-storage/main/skills/baidu-drive/VERSION",
+    "installer_sha256": {
+      "linux-amd64": "02050e9a5ed5c5ddc314bf920c103238a669366a130e3bd43a125d83fdd00548",
+      "windows-amd64": "194f5174bbb3d9260cc5b7d465c4f98d6b9279e028db136dc1e57cc3bc1f49a0"
+    }
+  }
+}

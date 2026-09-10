@@ -4,79 +4,91 @@
 
 An installable Codex Skill bundle for downloading authorised Douyin media and archiving it to Quark Drive, Baidu Netdisk, or both.
 
-It contains:
+Pinned upstreams: DouK-Downloader `df8aced70e476ae3330fa913186f3207b4843201`, official Quark Skill `1.0.19`, and official Baidu Skill `v1.7.5`. Install and upgrade use only these fixed revisions. `check-upstreams` is read-only and never follows upstream automatically.
 
-- `skills/douyin-cloud-download`: the pinned DouK-Downloader adapter, job ledger, tests, and cloud-archive instructions.
-- `skills/baidu-drive`: the complete Baidu Netdisk Skill used by the adapter.
-- `vendor/TikTokDownloader`: the DouK-Downloader source pinned to `d3806386b392da7341397e18522acdd5283f2c81`.
-- `scripts/install.ps1`: a clean-machine installer for the two local Skills, the pinned runtime, and the official Quark Drive Skill.
+The current product version is `1.0.0`. The root `VERSION` file is the product version source of truth, `UPSTREAMS.lock.json` contains the reviewed upstream versions, origins, and installer SHA256 values, and `CHANGELOG.md` records release history. Version tags trigger GitHub Release packaging with source archives and `SHA256SUMS`.
 
-The installer obtains the Quark Drive Skill from its official published installation endpoint instead of committing its opaque runtime or any account data to this repository.
+## Supported platforms
 
-## Requirements
+Formal support covers Windows x86_64 and Linux x86_64 (Ubuntu/Debian). Base requirements are Python 3.12, Git, uv, Node.js, and Bash. Windows requires Git Bash from Git for Windows; the controller rejects WSL/Linux Bash as the Windows Bash runtime. ffmpeg is required only for live recording.
 
-- Windows PowerShell 7
-- Git, Python 3.12, `uv`, Node.js 16+, and Git Bash
-- A Codex desktop installation
-- Your own authorised Douyin account/session when the source requires it
-- Your own Quark and/or Baidu Netdisk accounts
+`CODEX_HOME` is honoured when set. Otherwise the default is `%USERPROFILE%\.codex` on Windows and `$HOME/.codex` on Linux.
 
 ## Install
 
-Clone this repository, then run:
+Windows:
 
 ```powershell
 Set-ExecutionPolicy -Scope Process Bypass
 .\scripts\install.ps1 -Onboard -QuickStart
 ```
 
-The installer never copies cookies, netdisk tokens, past jobs, search history, or downloaded media. It installs the bundled Douyin and Baidu Skills under the active Codex home, installs the pinned DouK runtime from `vendor/`, and retrieves the official Quark Skill into the same Skill directory. `-Onboard` starts the interactive first-use guide and `-QuickStart` removes its repeated confirmations; run `.\scripts\onboard.ps1` later to resume it.
+Linux:
 
-The guide explains how to copy a complete Cookie from a logged-in Douyin browser request and accepts it only in the local DouK-Downloader terminal. It then starts the official Quark and/or Baidu authorisation flows selected by the user. It never reads browser Cookies, displays cloud tokens, or bypasses provider safety prompts.
-
-The Baidu CLI deliberately remains an interactive step because it displays its own safety notice. To install it during setup, explicitly run:
-
-```powershell
-.\scripts\install.ps1 -InstallBaiduCli -Onboard
+```bash
+bash ./scripts/install.sh --onboard --quick-start
 ```
 
-To configure both cloud drives in one pass after installation:
+Add `-InstallBaiduCli` on Windows or `--install-baidu-cli` on Linux if the Baidu CLI should be installed during setup. To configure both drives later:
 
 ```powershell
 .\scripts\onboard.ps1 -Drive both -QuickStart
 ```
 
-Then complete the required interactive sign-ins:
-
-```powershell
-# Configure the Douyin disclaimer and Cookie only in this terminal.
-uv run --project "$env:USERPROFILE\.codex\state\douyin-cloud-download\upstream\d3806386b392" python "$env:USERPROFILE\.codex\skills\douyin-cloud-download\scripts\douyin_cloud.py" configure
-
-# Baidu Netdisk sign-in (after its CLI is installed).
-bash "$env:USERPROFILE\.codex\skills\baidu-drive\scripts\login.sh"
+```bash
+bash ./scripts/onboard.sh --drive both --quick-start
 ```
 
-For Quark Drive, ask Codex to perform a Quark action; it will initiate the official interactive login if the account is not authorised.
+Program files are replaced atomically while user state is preserved: DouK `Volume/`, optional `encipher.py`, jobs and history; Quark `codex/` auth/config; existing Baidu auth/config. The installed DouK runtime gets a SHA256 manifest and is verified before use. Quark installation accepts only an official HTTPS host, exact Skill version `1.0.19`, the expected package structure, and a matching CLI version, then writes an installation receipt.
 
-## Usage
+## Maintenance
 
-Restart Codex after installation. Examples:
+The shared controller is `scripts/setup.py`:
 
-- `把这个抖音下载到夸克网盘`
-- `批量下载这些抖音到百度和夸克`
-- `下载这个抖音合集到夸克网盘`
+```text
+python3.12 scripts/setup.py install
+python3.12 scripts/setup.py onboard --drive both
+python3.12 scripts/setup.py doctor
+python3.12 scripts/setup.py doctor --bundle
+python3.12 scripts/setup.py repair
+python3.12 scripts/setup.py upgrade
+python3.12 scripts/setup.py check-upstreams
+python3.12 scripts/setup.py versions
+python3.12 scripts/setup.py rollback [SNAPSHOT_ID]
+python3.12 scripts/setup.py cleanup-old-versions --keep 2
+```
 
-Cloud media is always stored under `./抖音下载/[作者]/`. Core media is the default; ask explicitly for music or covers.
+Use `py -3.12` on Windows. `repair` rebuilds the pinned runtime and Skills while preserving state. Before installation, `upgrade` creates a metadata backup, migrates old job manifests, and creates a persistent rollback snapshot; an installation failure restores that snapshot automatically. The default retention is the two most recent previous releases. Rollback restores the matching Skills and DouK runtime together while preserving the current Cookie/provider auth state, `Volume/`, and optional `encipher.py`.
 
-Only download material you own or are authorised to save. The bundle does not support paid/private-content bypasses or anti-signature bypass code.
+`doctor --bundle` writes a sanitized diagnostic ZIP containing system/runtime checks, recent rotating logs, job manifests, and current release metadata. Cookie, Authorization, access/refresh tokens, BDUSS, STOKEN, and URLs are redacted. Core failures keep the legacy top-level `error` name for existing consumers and add a stable `DCD-*` `error_code`, `cause`, `retryable`, and `recovery` metadata.
+
+`upgrade` installs only versions already reviewed in `UPSTREAMS.lock.json`. If Quark advertises a version other than `1.0.19`, installation/upgrade stops. `check-upstreams` reports candidates only; changing the reviewed lock remains an explicit review step.
+
+## Jobs and recovery
+
+Cloud media is stored under `./抖音下载/[作者]/`. A job can be finalized and its local payload removed only after every requested destination is verified successful. With destination `both`, one failed upload keeps the payload.
+
+```text
+python scripts/douyin_cloud.py recover --job JOB_ID
+python scripts/douyin_cloud.py resume-download --job JOB_ID
+```
+
+See `skills/douyin-cloud-download/SKILL.md` and `references/setup.md` for the full command surface and recovery rules.
 
 ## Verification
 
+Automated checks are intentionally focused on environment, paths, runtime integrity, compatibility boundaries, and job state. Real provider flows remain manual acceptance tests.
+
 ```powershell
-python -m py_compile .\skills\douyin-cloud-download\scripts\douyin_cloud.py
-python .\skills\douyin-cloud-download\tests\test_douyin_cloud.py
+py -3.12 -m py_compile scripts/setup.py skills/douyin-cloud-download/scripts/douyin_cloud.py
+py -3.12 skills/douyin-cloud-download/tests/test_douyin_cloud.py
+py -3.12 scripts/setup.py check-upstreams
 ```
+
+Manual acceptance should cover Douyin→Quark, Douyin→Baidu, a deliberate one-drive failure with `both`, interrupted download recovery, and cleanup only after all requested uploads succeed.
+
+Only download media you own or are authorised to save. The bundle does not provide paid/private-content bypasses.
 
 ## Licensing
 
-DouK-Downloader is included as a verbatim GPL-3.0 upstream snapshot; see [vendor/TikTokDownloader/license](vendor/TikTokDownloader/license). See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the remaining component boundaries.
+DouK-Downloader is retained as a GPL-3.0 upstream source snapshot in `vendor/TikTokDownloader`; see `vendor/TikTokDownloader/license`. See [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md) for the remaining third-party boundaries.
